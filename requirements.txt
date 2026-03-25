@@ -1,0 +1,22 @@
+# Core ML
+pandas>=2.0.0
+numpy>=1.24.0
+scikit-learn>=1.3.0
+xgboost>=2.0.0
+
+# Technical Analysis
+pandas-ta>=0.3.14b
+
+# Data Storage
+pyarrow>=14.0.0
+
+# Model Persistence
+joblib>=1.3.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Utilities
+python-dotenv>=1.0.0
+requests>=2.31.0

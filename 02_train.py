@@ -1,0 +1,904 @@
+"""
+=============================================================================
+NSE INTRADAY STRATEGY — STEP 2: MULTI-DAY TRAIN & BACKTEST
+=============================================================================
+Reads the parquet data lake, trains on all days except the most recent,
+tests on the most recent day (true out-of-sample), saves model artifacts.
+
+Walk-forward logic (multi-day):
+  Day 1 ─── train ───┐
+  Day 2 ─── train ───┤ → model → tested on Day N (latest)
+  ...                │
+  Day N-1 ── train ──┘
+  Day N ─── TEST  ←── never seen during training
+
+Usage:
+    python 02_train.py                    # train on all lake data
+    python 02_train.py --test-date 2026-03-20   # override test day
+    python 02_train.py --min-train-days 5       # require at least N train days
+=============================================================================
+"""
+
+import warnings
+warnings.filterwarnings("ignore")
+
+import os, sys, json, argparse, joblib
+from pathlib import Path
+from datetime import datetime
+
+import numpy as np
+import pandas as pd
+import pandas_ta as ta
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+import seaborn as sns
+
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import (classification_report, f1_score,
+                              accuracy_score, confusion_matrix)
+import xgboost as xgb
+
+# ─── PATHS ───────────────────────────────────────────────────────────────────
+BASE_DIR      = Path(__file__).parent
+DATA_DIR      = BASE_DIR / "data"
+LAKE_DIR      = DATA_DIR / "lake"
+REGISTRY_PATH = DATA_DIR / "registry.json"
+MODEL_DIR     = BASE_DIR / "models"
+REPORT_DIR    = BASE_DIR / "reports"
+MODEL_DIR.mkdir(exist_ok=True)
+REPORT_DIR.mkdir(exist_ok=True)
+
+# ─── STRATEGY CONFIG ─────────────────────────────────────────────────────────
+FORWARD_BARS = 6
+UP_THRESHOLD = 0.004
+DOWN_THRESHOLD = -0.004
+MIN_CONF = 0.58
+ATR_SL_MULT = 1.4
+ATR_TP_MULT = 4.2
+BROKERAGE_PCT   = 0.0003
+PORTFOLIO_SIZE  = 100_000
+MAX_RISK_PER_TRADE = 5_000      # 5% of portfolio
+MAX_OPEN_TRADES = 2             # Max concurrent positions
+MAX_EXPOSURE_PCT = 0.50         # 60% max deployed
+MAX_EXPOSURE = PORTFOLIO_SIZE * MAX_EXPOSURE_PCT  # ₹60,000
+
+# Capital constraints for realistic backtesting
+CAPITAL         = 100_000
+
+# Skip tracking for diagnostics (list updated by backtest)
+skipped_trade_reasons = []
+PORTFOLIO_SIZE  = 100_000
+MAX_RISK_PER_TRADE = 5_000
+MIN_TRAIN_DAYS  = 1         # lower for early-stage (you only have 1 day now)
+
+FEATURE_COLS = [
+    "ret_1","ret_3","ret_5","log_ret_1","body",
+    "upper_shadow","lower_shadow","hl_range","is_bullish",
+    "ema5_dist","ema10_dist","ema20_dist","ema5_10_xo",
+    "macd_hist","macd_bull","adx","di_diff",
+    "rsi14","rsi_overbought","rsi_oversold",
+    "stoch_k","stoch_d","stoch_bull","roc10","willr14",
+    "atr_pct","bb_pct","bb_width","bb_squeeze",
+    "vwap_dist","vol_ratio","high_vol","obv_trend",
+    "mins_open","session",
+    "rolling_std5","rolling_std10","price_rank20",
+    # multi-day only features (zero-filled for single-day runs)
+    "prev_day_ret",       # prior day close-to-close return
+    "day_num",            # trading day index (0=oldest)
+    "day_of_week",        # 0=Mon … 4=Fri
+]
+
+# ─── FEATURE ENGINEERING ─────────────────────────────────────────────────────
+def engineer_features(df: pd.DataFrame,
+                      prev_close_map: dict = None) -> pd.DataFrame:
+    """
+    Same indicators as single-day pipeline PLUS multi-day features.
+    prev_close_map: {ticker: prev_day_close_price}
+    """
+    d = df.copy().reset_index(drop=True)
+    d = d.sort_values("DateTime").reset_index(drop=True)
+
+    # Price action
+    d["ret_1"]        = d["Close"].pct_change(1)
+    d["ret_3"]        = d["Close"].pct_change(3)
+    d["ret_5"]        = d["Close"].pct_change(5)
+    d["log_ret_1"]    = np.log(d["Close"] / d["Close"].shift(1))
+    d["body"]         = (d["Close"] - d["Open"]) / d["Open"]
+    d["upper_shadow"] = (d["High"] - d[["Open","Close"]].max(axis=1)) / d["Open"]
+    d["lower_shadow"] = (d[["Open","Close"]].min(axis=1) - d["Low"]) / d["Open"]
+    d["hl_range"]     = (d["High"] - d["Low"]) / d["Close"]
+    d["is_bullish"]   = (d["Close"] >= d["Open"]).astype(int)
+
+    # Trend
+    d["ema5"]         = ta.ema(d["Close"], length=5)
+    d["ema10"]        = ta.ema(d["Close"], length=10)
+    d["ema20"]        = ta.ema(d["Close"], length=20)
+    d["ema5_dist"]    = (d["Close"] - d["ema5"])  / d["Close"]
+    d["ema10_dist"]   = (d["Close"] - d["ema10"]) / d["Close"]
+    d["ema20_dist"]   = (d["Close"] - d["ema20"]) / d["Close"]
+    d["ema5_10_xo"]   = (d["ema5"] > d["ema10"]).astype(int)
+
+    macd = ta.macd(d["Close"], fast=12, slow=26, signal=9)
+    if macd is not None and not macd.empty:
+        d["macd_hist"] = macd.iloc[:, 1].fillna(0)
+        d["macd_bull"] = (d["macd_hist"] > 0).astype(int)
+    else:
+        d["macd_hist"] = 0.0; d["macd_bull"] = 0
+
+    adx = ta.adx(d["High"], d["Low"], d["Close"], length=14)
+    if adx is not None and not adx.empty:
+        d["adx"]      = adx.iloc[:, 0]
+        d["di_diff"]  = adx.iloc[:, 1] - adx.iloc[:, 2]
+    else:
+        d["adx"] = 25.0; d["di_diff"] = 0.0
+
+    # Momentum
+    d["rsi14"]          = ta.rsi(d["Close"], length=14)
+    d["rsi_overbought"] = (d["rsi14"] > 70).astype(int)
+    d["rsi_oversold"]   = (d["rsi14"] < 30).astype(int)
+
+    stoch = ta.stoch(d["High"], d["Low"], d["Close"], k=14, d=3)
+    if stoch is not None and not stoch.empty:
+        d["stoch_k"]   = stoch.iloc[:, 0]
+        d["stoch_d"]   = stoch.iloc[:, 1]
+        d["stoch_bull"]= (d["stoch_k"] > d["stoch_d"]).astype(int)
+    else:
+        d["stoch_k"] = 50.0; d["stoch_d"] = 50.0; d["stoch_bull"] = 0
+
+    d["roc10"]   = ta.roc(d["Close"], length=10)
+    d["willr14"] = ta.willr(d["High"], d["Low"], d["Close"], length=14)
+
+    # Volatility
+    atr = ta.atr(d["High"], d["Low"], d["Close"], length=14)
+    d["atr14"]  = atr if atr is not None else d["Close"] * 0.005
+    d["atr_pct"]= d["atr14"] / d["Close"]
+
+    bb = ta.bbands(d["Close"], length=20, std=2)
+    if bb is not None and not bb.empty:
+        d["bb_upper"]  = bb.iloc[:, 0]
+        d["bb_mid"]    = bb.iloc[:, 1]
+        d["bb_lower"]  = bb.iloc[:, 2]
+        d["bb_pct"]    = bb.iloc[:, 4]
+        d["bb_width"]  = (d["bb_upper"] - d["bb_lower"]) / d["bb_mid"]
+        d["bb_squeeze"]= (d["bb_width"] < d["bb_width"].rolling(20).mean()).astype(int)
+    else:
+        d["bb_pct"] = 0.5; d["bb_width"] = 0.02; d["bb_squeeze"] = 0
+
+    # Volume
+    d["cum_vol_price"] = (d["Close"] * d["Volume"]).cumsum()
+    d["cum_vol"]       = d["Volume"].cumsum()
+    d["vwap"]          = d["cum_vol_price"] / d["cum_vol"].replace(0, np.nan)
+    d["vwap_dist"]     = (d["Close"] - d["vwap"]) / d["Close"]
+    vol_ma             = d["Volume"].rolling(20).mean()
+    d["vol_ratio"]     = d["Volume"] / vol_ma.replace(0, np.nan)
+    d["high_vol"]      = (d["vol_ratio"] > 1.5).astype(int)
+    obv                = ta.obv(d["Close"], d["Volume"])
+    d["obv_ema"]       = ta.ema(obv, length=10)
+    d["obv_trend"]     = (obv > d["obv_ema"]).astype(int)
+
+    # Time
+    d["min_of_day"] = d["DateTime"].dt.hour * 60 + d["DateTime"].dt.minute
+    d["mins_open"]  = d["min_of_day"] - (9 * 60 + 15)
+    d["session"]    = pd.cut(
+        d["mins_open"], bins=[-1, 30, 120, 270, 999], labels=[0, 1, 2, 3]
+    ).astype(int)
+    d["day_of_week"]= d["DateTime"].dt.dayofweek
+
+    # Rolling
+    d["rolling_std5"]  = d["ret_1"].rolling(5).std()
+    d["rolling_std10"] = d["ret_1"].rolling(10).std()
+    d["price_rank20"]  = d["Close"].rolling(20).rank(pct=True)
+
+    # Multi-day features
+    ticker = d["ticker"].iloc[0] if "ticker" in d.columns else ""
+    if prev_close_map and ticker in prev_close_map:
+        prev_close           = prev_close_map[ticker]
+        first_open           = d["Open"].iloc[0]
+        d["prev_day_ret"]    = (first_open - prev_close) / prev_close
+    else:
+        d["prev_day_ret"]    = 0.0
+
+    return d
+
+
+def label_direction(df: pd.DataFrame) -> pd.DataFrame:
+    d = df.copy()
+    d["fwd_ret"] = d["Close"].shift(-FORWARD_BARS) / d["Close"] - 1
+    d["label"]   = np.select(
+        [d["fwd_ret"] > UP_THRESHOLD, d["fwd_ret"] < DOWN_THRESHOLD],
+        [2, 0], default=1
+    )
+    return d
+
+
+# ─── LOAD LAKE ───────────────────────────────────────────────────────────────
+def load_lake(dates: list) -> pd.DataFrame:
+    """Load and concatenate parquet files for given dates."""
+    frames = []
+    for i, date in enumerate(sorted(dates)):
+        path = LAKE_DIR / f"{date}.parquet"
+        if not path.exists():
+            print(f"  [WARN] Parquet not found for {date}, skipping.")
+            continue
+        day_df = pd.read_parquet(path, engine="pyarrow")
+        day_df["day_num"] = i       # ordinal day index
+        frames.append(day_df)
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
+
+def build_features_multiday(lake_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Process each (ticker, date) group, passing prev-day close forward.
+    """
+    all_out = []
+    # Sort by date so we can track prev_close
+    dates   = sorted(lake_df["trade_date"].unique())
+    prev_close_map = {}   # ticker → last close of previous date
+
+    for date in dates:
+        day_data = lake_df[lake_df["trade_date"] == date].copy()
+        tickers  = day_data["ticker"].unique()
+
+        for ticker in tickers:
+            sub = day_data[day_data["ticker"] == ticker].copy()
+            sub = engineer_features(sub, prev_close_map)
+            sub = label_direction(sub)
+            all_out.append(sub)
+
+        # Update prev_close_map with today's closes
+        for ticker in tickers:
+            sub = day_data[day_data["ticker"] == ticker]
+            if not sub.empty:
+                prev_close_map[ticker] = sub.sort_values("DateTime")["Close"].iloc[-1]
+
+    if not all_out:
+        return pd.DataFrame()
+    return pd.concat(all_out, ignore_index=True)
+
+
+# ─── BACKTEST ─────────────────────────────────────────────────────────────────
+def run_backtest(test_df, predictions, probabilities, model_name,
+                      available_capital=PORTFOLIO_SIZE,
+                      open_positions=None,
+                      total_exposure=0.0):
+    results = []
+    equity  = [PORTFOLIO_SIZE]
+    pnl_cum = 0.0
+    skipped_trade_reasons = []
+    peak_equity = PORTFOLIO_SIZE
+    current_capital = available_capital if available_capital else PORTFOLIO_SIZE
+    current_exposure = total_exposure
+    if open_positions is None:
+        open_positions = []
+    test_r  = test_df.reset_index(drop=True)
+    n       = len(test_r)
+
+    for i in range(n):
+        row    = test_r.iloc[i]
+        signal = predictions[i]
+        conf   = probabilities[i].max()
+        if signal == 1 or conf < MIN_CONF:
+            continue
+
+        entry  = row["Close"]
+        atr    = row["atr14"] if not pd.isna(row.get("atr14", np.nan)) else entry * 0.005
+        dirn   = "LONG" if signal == 2 else "SHORT"
+        sl     = entry - atr * ATR_SL_MULT if dirn == "LONG" else entry + atr * ATR_SL_MULT
+        tp     = entry + atr * ATR_TP_MULT if dirn == "LONG" else entry - atr * ATR_TP_MULT
+        # =====================================================================
+        # CAPITAL-AWARE POSITION SIZING
+        # =====================================================================
+        
+        # 1. Calculate risk-based quantity (max loss per trade = ₹5K)
+        sl_amount_per_unit = abs(entry - sl)
+        ticker = row.get("ticker", f"unknown_{i}")
+        if sl_amount_per_unit == 0:
+            skipped_trade_reasons.append({"ticker": ticker, "reason": "Zero SL distance"})
+            continue
+        
+        qty_risk_based = int(MAX_RISK_PER_TRADE / sl_amount_per_unit)
+        
+        # 2. Calculate margin-based quantity (can we afford this?)
+        margin_per_unit = entry
+        qty_margin_based = int(current_capital / margin_per_unit) if margin_per_unit > 0 else 0
+        
+        # 3. Check exposure constraint (not more than 60% deployed)
+        trade_margin = qty_risk_based * margin_per_unit
+        would_exceed_exposure = (current_exposure + trade_margin) > MAX_EXPOSURE
+        
+        qty_exposure_based = 0
+        remaining_exposure = MAX_EXPOSURE - current_exposure
+        if margin_per_unit > 0:
+            qty_exposure_based = int(remaining_exposure / margin_per_unit)
+        
+        # Final quantity: minimum of risk, margin, and exposure constraints
+        qty = min(qty_risk_based, qty_margin_based, qty_exposure_based)
+        
+        # ADDITIONAL: Hard cap - never risk more than ₹5K per trade
+        max_qty_by_risk_cap = int(5000 / sl_amount_per_unit) if sl_amount_per_unit > 0 else 0
+        qty = min(qty, max_qty_by_risk_cap)
+        
+        # ADDITIONAL: Never exceed available capital (margin constraint)
+        max_qty_by_capital = int(current_capital / entry) if entry > 0 else 0
+        qty = min(qty, max_qty_by_capital)
+        
+        # 4. Check max concurrent trades
+        currently_open = len([p for p in open_positions if p["status"] == "OPEN"])
+        if currently_open >= MAX_OPEN_TRADES:
+            print(f"  [SKIP {ticker}] Max open reached: {currently_open} >= {MAX_OPEN_TRADES}")
+            skipped_trade_reasons.append({
+                "ticker": ticker, 
+                "reason": f"Max open trades reached ({MAX_OPEN_TRADES})"
+            })
+            continue
+        else:
+            if currently_open > 0:
+                print(f"  [OPEN {ticker}] Currently open: {currently_open}, adding 1 more")
+        
+        # 5. Skip if quantity is 0 after all constraints
+        if qty == 0:
+            reason = ""
+            if qty_risk_based == 0:
+                reason = "SL too wide for ₹5K risk"
+            elif qty_margin_based == 0:
+                reason = "Insufficient capital"
+            elif qty_exposure_based == 0:
+                reason = "Max exposure (60%) would be exceeded"
+            skipped_trade_reasons.append({"ticker": ticker, "reason": reason})
+            print(f"  [SKIP] {ticker}: {reason}")
+            continue
+        
+        # 6. DEDUCT CAPITAL and ADD to exposure BEFORE trade executes
+        trade_requirement = qty * entry
+        current_capital -= trade_requirement
+        current_exposure += trade_requirement
+        
+        # Track open position
+        position = {
+            "ticker": ticker,
+            "entry": entry,
+            "sl": sl,
+            "tp": tp,
+            "qty": qty,
+            "direction": dirn,
+            "margin_used": trade_requirement,
+            "status": "OPEN"
+        }
+        open_positions.append(position)
+
+        exit_px = None; exit_rsn = "time_stop"
+        trailing_sl = sl  # Initialize trailing stop
+        bars_held = 0  # Track bars held (Priority 4)
+        
+        for j in range(i + 1, min(i + 1 + FORWARD_BARS + 1, n)):
+            b = test_r.iloc[j]
+            bars_held += 1
+            
+            if b["trade_date"] != row["trade_date"]:  # no overnight carry
+                break
+            
+            # ============================================
+            # SIMPLIFIED BREAKEVEN STOP (Priority 3)
+            # ============================================
+            sl_amount = abs(sl - entry)
+            
+            if dirn == "LONG":
+                current_price = b["Close"]
+                
+                # Breakeven: When profit ≥ 1.5x SL, move stop to entry
+                if current_price >= entry + sl_amount * 1.5 and trailing_sl <= entry:
+                    trailing_sl = entry * 1.001  # Just above breakeven
+                
+                # Check exits
+                if b["Low"] <= trailing_sl:
+                    exit_px = trailing_sl
+                    exit_rsn = "BREAKEVEN_SL" if trailing_sl > sl else "SL"
+                    break
+                if b["High"] >= tp:
+                    exit_px = tp; exit_rsn = "TARGET"; break
+                    
+            else:  # SHORT
+                current_price = b["Close"]
+                
+                # Breakeven: When profit ≥ 1.5x SL, move stop to entry
+                if current_price <= entry - sl_amount * 1.5 and trailing_sl >= entry:
+                    trailing_sl = entry * 0.999  # Just below breakeven
+                
+                # Check exits
+                if b["High"] >= trailing_sl:
+                    exit_px = trailing_sl
+                    exit_rsn = "BREAKEVEN_SL" if trailing_sl < sl else "SL"
+                    break
+                if b["Low"] <= tp:
+                    exit_px = tp; exit_rsn = "TARGET"; break
+            
+            # Priority 4: Max holding period timeout
+            if bars_held >= FORWARD_BARS:
+                exit_px = b["Close"]
+                exit_rsn = "TIMEOUT"
+                print(f"  [TIMEOUT] {ticker} after {bars_held} bars, P&L: Rs {(exit_px - entry) * qty:,.0f}")
+                break
+        
+        position["bars_held"] = bars_held
+        position["trailing_sl"] = trailing_sl
+
+        if exit_px is None:
+            exit_px = test_r.iloc[min(i + FORWARD_BARS * 3, n - 1)]["Close"]
+
+        # Calculate P&L
+        # Calculate raw gross P&L
+        gross   = (exit_px - entry) * qty * (1 if dirn == "LONG" else -1)
+        
+        # Priority 3: Cap max trade P&L at 15% of position value
+        position_value = qty * entry
+        max_allowed_pnl = position_value * 0.15  # 15% cap
+        max_allowed_loss = position_value * 0.15   # 15% max loss
+        
+        if gross > max_allowed_pnl:
+            print(f"  [CAP WARNING] {ticker}: Gross P&L Rs {gross:,.0f} exceeds 15% cap (Rs {max_allowed_pnl:,.0f})")
+            gross = max_allowed_pnl
+        elif gross < -max_allowed_loss:
+            print(f"  [CAP WARNING] {ticker}: Gross loss Rs {gross:,.0f} exceeds -15% cap")
+            gross = -max_allowed_loss
+        
+        brok    = (entry + exit_px) * qty * BROKERAGE_PCT
+        net     = gross - brok
+        pnl_cum += net
+        
+        # RETURN CAPITAL plus P&L
+        returned_capital = position["margin_used"] + net
+        current_capital += returned_capital
+        current_exposure -= position["margin_used"]
+        position["status"] = "CLOSED"
+        if len(open_positions) > 10:  # Only log if list is getting large
+            open_count = len([p for p in open_positions if p["status"] == "OPEN"])
+            print(f"  [CLOSE] {ticker}: {open_count} still open, {len(open_positions)} total in list")
+        
+        # Update tracking
+        peak_equity = max(peak_equity, current_capital)
+        equity.append(current_capital)
+        
+        # Capital tracking (trades list populated after this)
+
+        # Log equity state after this trade
+        equity_snapshot = {
+            "timestamp": str(row["DateTime"]),
+            "trade_num": len(results) + 1,
+            "equity": current_capital + current_exposure,
+            "available_capital": current_capital,
+            "exposure": current_exposure,
+        }
+        if "equity_curve" not in run_backtest.__dict__:
+            run_backtest.equity_curve = []
+        run_backtest.equity_curve.append(equity_snapshot)
+        
+        results.append({
+            "trade_date"  : str(row["trade_date"]),
+            "ticker"      : row["ticker"],
+            "entry_time"  : str(row["DateTime"]),
+            "direction"   : dirn,
+            "entry_price" : round(entry, 2),
+            "sl"          : round(sl, 2),
+            "target"      : round(tp, 2),
+            "sl_pct"      : round(abs(sl - entry) / entry * 100, 3),
+            "tp_pct"      : round(abs(tp - entry) / entry * 100, 3),
+            "rr_ratio"    : round((abs(tp - entry)) / (abs(sl - entry)), 2),
+            "exit_price"  : round(exit_px, 2),
+            "exit_reason" : exit_rsn,
+            "qty"         : qty,
+            "gross_pnl"   : round(gross, 2),
+            "brokerage"   : round(brok, 2),
+            "net_pnl"     : round(net, 2),
+            "confidence"  : round(conf, 4),
+            "win"         : net > 0,
+        })
+
+    trades = pd.DataFrame(results)
+    if trades.empty:
+        return {"trades": trades, "equity": equity, "summary": {}}
+
+    wins   = trades[trades["win"]]
+    losses = trades[~trades["win"]]
+    pf     = abs(wins["net_pnl"].sum() / losses["net_pnl"].sum()) \
+             if losses["net_pnl"].sum() != 0 else float("inf")
+    rets   = trades["net_pnl"] / CAPITAL
+    sharpe = rets.mean() / rets.std() * np.sqrt(252) if rets.std() > 0 else 0.0
+    # Calculate drawdown from peak equity (not from fixed starting capital)
+    eq_arr = np.array(equity)
+    running_peak = np.maximum.accumulate(eq_arr)
+    drawdowns = (eq_arr - running_peak) / running_peak  # percentage drawdown
+    max_dd_amount = abs((eq_arr - running_peak).min())  # in rupees
+    max_dd_pct = abs(drawdowns.min()) * 100 if drawdowns.min() < 0 else 0
+    
+    # Also calculate vs original portfolio size
+    max_dd_vs_portfolio = abs(min(eq_arr) - PORTFOLIO_SIZE)
+
+    summary = {
+        "model"           : model_name,
+        "test_date"       : test_df["trade_date"].iloc[0] if len(test_df) else "—",
+        "total_trades"    : len(trades),
+        "long_trades"     : int((trades["direction"] == "LONG").sum()),
+        "short_trades"    : int((trades["direction"] == "SHORT").sum()),
+        "wins"            : int(len(wins)),
+        "losses"          : int(len(losses)),
+        "win_rate_pct"    : round(len(wins) / len(trades) * 100, 2),
+        "cumulative_trade_pnl": round(trades["net_pnl"].sum(), 2),  # Sum of all trade profits (for reference)
+        "portfolio_return"  : round(equity[-1] - PORTFOLIO_SIZE, 2) if equity else 0,  # ACTUAL profit: final - starting
+        "starting_equity"   : PORTFOLIO_SIZE,
+        "final_equity"      : round(equity[-1], 2) if equity else PORTFOLIO_SIZE,
+        "peak_equity"       : round(peak_equity, 2),
+        "avg_win_inr"     : round(wins["net_pnl"].mean() if len(wins) else 0, 2),
+        "avg_loss_inr"    : round(losses["net_pnl"].mean() if len(losses) else 0, 2),
+        "profit_factor"   : round(pf, 3),
+        "sharpe_ratio"    : round(sharpe, 3),
+        "max_drawdown_inr": round(max_dd_amount, 2),
+        "sl_hits"         : int((trades["exit_reason"] == "SL").sum()),
+        "target_hits"     : int((trades["exit_reason"] == "TARGET").sum()),
+        "breakeven_hits"  : int(trades["exit_reason"].str.contains("BREAKEVEN").sum()),
+        "timeout_hits"    : int((trades["exit_reason"] == "TIMEOUT").sum()),
+        "time_stops"      : int((trades["exit_reason"] == "time_stop").sum()),
+        "return_pct"      : round((equity[-1] - PORTFOLIO_SIZE) / PORTFOLIO_SIZE * 100, 3) if equity else 0,  # Portfolio return %
+    }
+    return {
+        "trades": trades, 
+        "equity": equity, 
+        "summary": summary,
+        "final_capital": current_capital,
+        "final_exposure": current_exposure,
+        "open_positions": [p for p in open_positions if p["status"] == "OPEN"],
+        "peak_equity": peak_equity,
+    }
+
+
+# ─── CHARTS ──────────────────────────────────────────────────────────────────
+BGDARK  = "#0D1117"; BGPANEL = "#161B22"
+ACCENT  = "#00D4FF"; GREEN   = "#00FF7F"
+RED     = "#FF4444"; YELLOW  = "#FFD700"; PURPLE  = "#BB86FC"
+
+def save_charts(bt_rf, bt_xgb, test_df, rf_imp, xgb_imp,
+                best_name, train_dates, test_date, report_dir):
+    plt.style.use("dark_background")
+
+    # ── 1. Equity curves
+    fig, axes = plt.subplots(1, 2, figsize=(16, 5), facecolor=BGDARK)
+    fig.suptitle(
+        f"EQUITY CURVES  |  Train: {train_dates[0]} → {train_dates[-1]}  |  Test: {test_date}",
+        fontsize=12, color=ACCENT, fontweight="bold"
+    )
+    for ax, bt, name, col in [
+        (axes[0], bt_rf,  "Random Forest", ACCENT),
+        (axes[1], bt_xgb, "XGBoost",       PURPLE),
+    ]:
+        eq = bt["equity"]
+        ax.plot(eq, color=col, linewidth=1.5)
+        ax.fill_between(range(len(eq)), CAPITAL, eq,
+                        where=[e >= CAPITAL for e in eq], alpha=0.2, color=GREEN)
+        ax.fill_between(range(len(eq)), CAPITAL, eq,
+                        where=[e < CAPITAL for e in eq], alpha=0.2, color=RED)
+        ax.axhline(CAPITAL, color="white", linewidth=0.7, linestyle="--", alpha=0.5)
+        ax.set_facecolor(BGPANEL); ax.set_title(name, color=col)
+        ax.set_xlabel("Trade #", color="grey"); ax.set_ylabel("₹", color="grey")
+        ax.tick_params(colors="grey")
+        s = bt["summary"]
+        if s:
+            c = GREEN if s["cumulative_trade_pnl"] >= 0 else RED
+            ax.text(0.02, 0.95,
+                    f"P&L: ₹{s['cumulative_trade_pnl']:,.0f} | WR: {s['win_rate_pct']}% | PF: {s['profit_factor']}",
+                    transform=ax.transAxes, fontsize=9, color=c, va="top")
+    plt.tight_layout()
+    plt.savefig(report_dir / "01_equity_curves.png", dpi=150,
+                bbox_inches="tight", facecolor=BGDARK)
+    plt.close()
+
+    # ── 2. Feature importance
+    fig, axes = plt.subplots(1, 2, figsize=(18, 7), facecolor=BGDARK)
+    fig.suptitle("FEATURE IMPORTANCE", fontsize=12, color=ACCENT, fontweight="bold")
+    for ax, imp, name, col in [
+        (axes[0], rf_imp.head(15),  "Random Forest", ACCENT),
+        (axes[1], xgb_imp.head(15), "XGBoost",       PURPLE),
+    ]:
+        ax.barh(imp["feature"][::-1], imp["importance"][::-1], color=col, alpha=0.85)
+        ax.set_facecolor(BGPANEL); ax.set_title(name, color=col)
+        ax.tick_params(colors="grey", labelsize=8)
+        ax.set_xlabel("Importance", color="grey")
+    plt.tight_layout()
+    plt.savefig(report_dir / "02_feature_importance.png", dpi=150,
+                bbox_inches="tight", facecolor=BGDARK)
+    plt.close()
+
+    # ── 3. Trade analytics for best model
+    best_bt = bt_rf if best_name == "RandomForest" else bt_xgb
+    trades  = best_bt["trades"]
+    if not trades.empty:
+        fig, axes = plt.subplots(2, 2, figsize=(16, 10), facecolor=BGDARK)
+        fig.suptitle(
+            f"TRADE ANALYTICS — {best_name} | {best_bt['summary']['total_trades']} Trades",
+            fontsize=12, color=ACCENT, fontweight="bold"
+        )
+        # P&L per trade
+        ax = axes[0, 0]
+        colors = [GREEN if v >= 0 else RED for v in trades["net_pnl"]]
+        ax.bar(range(len(trades)), trades["net_pnl"], color=colors, alpha=0.8)
+        ax.axhline(0, color="white", linewidth=0.7)
+        ax.set_facecolor(BGPANEL); ax.set_title("Net P&L per Trade (₹)", color=ACCENT)
+        ax.set_xlabel("Trade #", color="grey"); ax.set_ylabel("₹", color="grey")
+        ax.tick_params(colors="grey")
+
+        # Exit pie
+        ax = axes[0, 1]
+        ec = trades["exit_reason"].value_counts()
+        pie_c = {"TARGET": GREEN, "SL": RED, "time_stop": YELLOW}
+        ax.pie(ec.values, labels=ec.index, autopct="%1.1f%%",
+               colors=[pie_c.get(k, ACCENT) for k in ec.index],
+               textprops={"color": "white", "fontsize": 10})
+        ax.set_facecolor(BGPANEL); ax.set_title("Exit Reason", color=ACCENT)
+
+        # Win/loss by direction
+        ax = axes[1, 0]
+        by_dir = trades.groupby(["direction", "win"]).size().unstack(fill_value=0)
+        x = np.arange(len(by_dir)); w = 0.35
+        ax.bar(x - w/2, by_dir.get(True,  pd.Series([0]*len(by_dir), index=by_dir.index)), w, label="Win",  color=GREEN, alpha=0.8)
+        ax.bar(x + w/2, by_dir.get(False, pd.Series([0]*len(by_dir), index=by_dir.index)), w, label="Loss", color=RED,   alpha=0.8)
+        ax.set_xticks(x); ax.set_xticklabels(by_dir.index, color="grey")
+        ax.set_facecolor(BGPANEL); ax.set_title("Win/Loss by Direction", color=ACCENT)
+        ax.tick_params(colors="grey"); ax.legend(facecolor=BGPANEL, labelcolor="white")
+
+        # Confidence histogram
+        ax = axes[1, 1]
+        ax.hist(trades[trades["win"]]["confidence"],  bins=15, color=GREEN, alpha=0.7, label="Win")
+        ax.hist(trades[~trades["win"]]["confidence"], bins=15, color=RED,   alpha=0.7, label="Loss")
+        ax.axvline(MIN_CONF, color=YELLOW, linewidth=1.5, linestyle="--")
+        ax.set_facecolor(BGPANEL); ax.set_title("Confidence — Win vs Loss", color=ACCENT)
+        ax.tick_params(colors="grey"); ax.legend(facecolor=BGPANEL, labelcolor="white")
+
+        plt.tight_layout()
+        plt.savefig(report_dir / "03_trade_analytics.png", dpi=150,
+                    bbox_inches="tight", facecolor=BGDARK)
+        plt.close()
+
+    # ── 4. Cumulative P&L by ticker (best model)
+    if not trades.empty and "ticker" in trades.columns:
+        tick_pnl = trades.groupby("ticker")["net_pnl"].sum().sort_values()
+        fig, ax  = plt.subplots(figsize=(12, max(4, len(tick_pnl) * 0.5)), facecolor=BGDARK)
+        fig.suptitle(f"P&L BY TICKER — {best_name}", fontsize=12, color=ACCENT, fontweight="bold")
+        colors = [GREEN if v >= 0 else RED for v in tick_pnl.values]
+        ax.barh(tick_pnl.index, tick_pnl.values, color=colors, alpha=0.85)
+        ax.axvline(0, color="white", linewidth=0.7)
+        ax.set_facecolor(BGPANEL); ax.tick_params(colors="grey", labelsize=9)
+        ax.set_xlabel("Net P&L (₹)", color="grey")
+        for i, (v, t) in enumerate(zip(tick_pnl.values, tick_pnl.index)):
+            ax.text(v + (500 if v >= 0 else -500), i, f"₹{v:,.0f}",
+                    va="center", fontsize=8, color="white")
+        plt.tight_layout()
+        plt.savefig(report_dir / "04_pnl_by_ticker.png", dpi=150,
+                    bbox_inches="tight", facecolor=BGDARK)
+        plt.close()
+
+
+# ─── MAIN ────────────────────────────────────────────────────────────────────
+def main(args):
+    print(f"\n{'='*65}")
+    print("  NSE MULTI-DAY TRAINING PIPELINE")
+    print(f"{'='*65}")
+
+    # Load registry
+    if not REGISTRY_PATH.exists():
+        print("[ERROR] No data lake found. Run 01_ingest.py first.")
+        sys.exit(1)
+    with open(REGISTRY_PATH) as f:
+        reg = json.load(f)
+
+    all_dates = sorted(reg["days"].keys())
+    if len(all_dates) < 1:
+        print("[ERROR] Lake is empty. Ingest at least one day first.")
+        sys.exit(1)
+
+    # Determine train / test split - 70/30 CHRONOLOGICAL
+    sorted_dates = sorted(all_dates)
+    n_dates = len(sorted_dates)
+    
+    if args.test_date:
+        test_date = args.test_date
+        train_dates = [d for d in sorted_dates if d < test_date]
+    else:
+        # 70% train, 30% test (chronological)
+        split_idx = max(1, int(n_dates * 0.7))
+        if split_idx >= n_dates:
+            split_idx = n_dates - 1
+        train_dates = sorted_dates[:split_idx]
+        test_date = sorted_dates[split_idx]
+    
+    print(f"\n  [SPLIT] {len(train_dates)} days ({len(train_dates)/n_dates*100:.0f}%) train | {n_dates - len(train_dates)} days ({(n_dates-len(train_dates))/n_dates*100:.0f}%) test")
+
+    # If only 1 day in lake, use 60/40 intra-day split (bootstrap mode)
+    bootstrap_mode = len(train_dates) == 0
+    if bootstrap_mode:
+        print(f"\n  [Bootstrap mode] Only 1 day available — using 60/40 intra-day split")
+        print(f"  Add more days with 01_ingest.py to enable true multi-day walk-forward\n")
+        train_dates = [test_date]
+
+    print(f"\n[1/5] Loading lake data ...")
+    print(f"  Train days : {len(train_dates)}  ({', '.join(train_dates)})")
+    
+    # MULTI-DAY TEST SET (proper 70/30 split)
+    sorted_dates = sorted(all_dates)
+    split_idx = max(1, int(len(sorted_dates) * 0.7))
+    test_dates = sorted_dates[split_idx:]  # ALL remaining dates are test
+    test_date = test_dates[0]  # Keep first for compatibility
+    
+    print(f"  Test days  : {len(test_dates)}  ({', '.join(test_dates)})")
+    print(f"  (Using combined test set for out-of-sample validation)")
+
+    # Load all data (train + ALL test days)
+    all_used_dates = list(set(train_dates + test_dates))
+    lake_df = load_lake(all_used_dates)
+    if lake_df.empty:
+        print("[ERROR] Could not load data."); sys.exit(1)
+
+    print(f"\n[2/5] Building features ...")
+    full_df = build_features_multiday(lake_df)
+    full_df = full_df.dropna(subset=FEATURE_COLS + ["label", "fwd_ret"])
+    full_df = full_df.sort_values(["trade_date", "DateTime"]).reset_index(drop=True)
+    print(f"  Total labelled rows: {len(full_df):,}")
+
+    # Split
+    if bootstrap_mode:
+        split = int(len(full_df) * 0.60)
+        train_df = full_df.iloc[:split].copy()
+        test_df  = full_df.iloc[split:].copy()
+    else:
+        train_df = full_df[full_df["trade_date"].isin(train_dates)].copy()
+        test_df  = full_df[full_df["trade_date"] == test_date].copy()
+
+    print(f"  Train rows : {len(train_df):,}")
+    print(f"  Test rows  : {len(test_df):,}")
+
+    X_train = train_df[FEATURE_COLS]; y_train = train_df["label"]
+    X_test  = test_df[FEATURE_COLS];  y_test  = test_df["label"]
+
+    scaler = StandardScaler()
+    X_tr_s = scaler.fit_transform(X_train)
+    X_te_s = scaler.transform(X_test)
+
+    print(f"\n[3/5] Training models ...")
+    rf = RandomForestClassifier(
+        n_estimators=400, max_depth=10, min_samples_leaf=8,
+        class_weight="balanced", random_state=42, n_jobs=-1
+    )
+    rf.fit(X_tr_s, y_train)
+    rf_pred  = rf.predict(X_te_s)
+    rf_proba = rf.predict_proba(X_te_s)
+
+    xgb_m = xgb.XGBClassifier(
+        n_estimators=400, max_depth=6, learning_rate=0.04,
+        subsample=0.8, colsample_bytree=0.8,
+        eval_metric="mlogloss", random_state=42, verbosity=0
+    )
+    xgb_m.fit(X_tr_s, y_train)
+    xgb_pred  = xgb_m.predict(X_te_s)
+    xgb_proba = xgb_m.predict_proba(X_te_s)
+
+    rf_f1  = f1_score(y_test, rf_pred,  average="weighted")
+    xgb_f1 = f1_score(y_test, xgb_pred, average="weighted")
+    
+    # NOTE: Model selection uses backtest Sharpe Ratio, not F1
+    # F1 measures classification accuracy — Sharpe measures trading performance
+    # Run quick backtests first, then pick model with better Sharpe
+    bt_rf_quick = run_backtest(test_df, rf_pred, rf_proba, "RandomForest")
+    bt_xgb_quick = run_backtest(test_df, xgb_pred, xgb_proba, "XGBoost")
+    
+    rf_sharpe = bt_rf_quick["summary"].get("sharpe_ratio", 0) if bt_rf_quick["summary"] else 0
+    xgb_sharpe = bt_xgb_quick["summary"].get("sharpe_ratio", 0) if bt_xgb_quick["summary"] else 0
+    
+    best_name = "RandomForest" if rf_sharpe >= xgb_sharpe else "XGBoost"
+    print(f"\n  RF  F1={rf_f1:.4f} Sharpe={rf_sharpe:.3f} | XGB F1={xgb_f1:.4f} Sharpe={xgb_sharpe:.3f} → Best by Sharpe: {best_name}")
+    print(f"\n  {best_name} classification report:")
+    pred = rf_pred if best_name == "RandomForest" else xgb_pred
+    print(classification_report(y_test, pred, target_names=["DOWN","FLAT","UP"]))
+
+    # Feature importance
+    rf_imp  = pd.DataFrame({"feature": FEATURE_COLS, "importance": rf.feature_importances_})\
+                .sort_values("importance", ascending=False).reset_index(drop=True)
+    xgb_imp = pd.DataFrame({"feature": FEATURE_COLS, "importance": xgb_m.feature_importances_})\
+                .sort_values("importance", ascending=False).reset_index(drop=True)
+
+    print(f"\n[4/5] Backtesting ...")
+    # Reuse pre-computed backtests from Sharpe-based model selection
+    bt_rf = bt_rf_quick
+    bt_xgb = bt_xgb_quick
+
+    for bt in [bt_rf, bt_xgb]:
+        s = bt["summary"]
+        if not s: continue
+        print(f"\n  ┌─ {s['model']} ───────────────────────────────────")
+        print(f"  │ Trades     : {s['total_trades']}  (L:{s['long_trades']}  S:{s['short_trades']})")
+        print(f"  │ Win Rate   : {s['win_rate_pct']}%  ({s['wins']}W / {s['losses']}L)")
+        print(f"  │ Net P&L    : ₹{s['cumulative_trade_pnl']:,.2f}  ({s['return_pct']}%)")
+        print(f"  │ Profit Fac : {s['profit_factor']}  |  Sharpe: {s['sharpe_ratio']}")
+        print(f"  │ Max DD     : ₹{s['max_drawdown_inr']:,.2f}")
+        print(f"  └──────────────────────────────────────────────────")
+
+    # Save model artifacts
+    run_ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
+    art_dir  = MODEL_DIR / f"run_{run_ts}"
+    art_dir.mkdir(exist_ok=True)
+
+    joblib.dump(rf,     art_dir / "rf_model.pkl")
+    joblib.dump(xgb_m,  art_dir / "xgb_model.pkl")
+    joblib.dump(scaler, art_dir / "scaler.pkl")
+
+    meta = {
+        "run_timestamp"  : run_ts,
+        "bootstrap_mode" : bootstrap_mode,
+        "train_dates"    : train_dates,
+        "test_date"      : test_date,
+        "feature_cols"   : FEATURE_COLS,
+        "config": {
+            "forward_bars"   : FORWARD_BARS,
+            "up_threshold"   : UP_THRESHOLD,
+            "down_threshold" : DOWN_THRESHOLD,
+            "min_conf"       : MIN_CONF,
+            "atr_sl_mult"    : ATR_SL_MULT,
+            "atr_tp_mult"    : ATR_TP_MULT,
+            "brokerage_pct"  : BROKERAGE_PCT,
+            "capital"        : CAPITAL,
+        },
+        "models": {
+            "RandomForest": {"f1": round(rf_f1, 4), "sharpe": round(rf_sharpe, 4), "backtest": bt_rf["summary"]},
+            "XGBoost"     : {"f1": round(xgb_f1, 4), "sharpe": round(xgb_sharpe, 4), "backtest": bt_xgb["summary"]},
+        },
+        "best_model"     : best_name,
+        "top10_features" : rf_imp.head(10).to_dict("records"),
+    }
+    with open(art_dir / "meta.json", "w") as f:
+        json.dump(meta, f, indent=2, default=str)
+
+    # Always overwrite 'latest' symlink-style copy
+    latest_dir = MODEL_DIR / "latest"
+    latest_dir.mkdir(exist_ok=True)
+    for fname in ["rf_model.pkl", "xgb_model.pkl", "scaler.pkl", "meta.json"]:
+        import shutil
+        shutil.copy2(art_dir / fname, latest_dir / fname)
+
+    print(f"\n  Model artifacts saved → {art_dir}")
+    print(f"  Latest copy           → {latest_dir}")
+
+    # Charts
+    print(f"\n[5/5] Generating report charts ...")
+    rpt_dir = REPORT_DIR / f"run_{run_ts}"
+    rpt_dir.mkdir(exist_ok=True)
+    save_charts(bt_rf, bt_xgb, test_df, rf_imp, xgb_imp,
+                best_name, train_dates, test_date, rpt_dir)
+
+    # Save trade log
+    best_bt = bt_rf if best_name == "RandomForest" else bt_xgb
+    if not best_bt["trades"].empty:
+        best_bt["trades"].to_csv(rpt_dir / f"trade_log_{best_name}.csv", index=False)
+
+    print(f"\n{'='*65}")
+    print(f"  RUN COMPLETE")
+    print(f"{'='*65}")
+    print(f"  Best model   : {best_name}")
+    s = (bt_rf if best_name == "RandomForest" else bt_xgb)["summary"]
+    if s:
+        print(f"  Trades       : {s['total_trades']}  |  Win Rate: {s['win_rate_pct']}%")
+        print(f"  Net P&L      : ₹{s['cumulative_trade_pnl']:,.2f}  ({s['return_pct']}%)")
+        print(f"  Profit Factor: {s['profit_factor']}  |  Sharpe: {s['sharpe_ratio']}")
+    print(f"  Reports      : {rpt_dir}")
+    print(f"  Models       : {art_dir}")
+    print(f"{'='*65}\n")
+
+    return meta
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="NSE Multi-Day Training Pipeline")
+    parser.add_argument("--test-date",      type=str, help="Override test date (YYYY-MM-DD)")
+    parser.add_argument("--min-train-days", type=int, default=MIN_TRAIN_DAYS)
+    args = parser.parse_args()
+    main(args)

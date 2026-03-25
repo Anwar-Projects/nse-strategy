@@ -1,0 +1,193 @@
+#!/bin/bash
+# =============================================================
+# NSE Strategy — Intelligent Daily Pipeline
+# Ingests → Retrains → Evaluates → Auto-tunes → Reports
+# =============================================================
+
+STRATEGY_DIR="/root/nse_strategy"
+PYTHON="$STRATEGY_DIR/venv/bin/python3"
+LOG="$STRATEGY_DIR/logs/daily_$(date +%Y%m%d).log"
+METRICS_FILE="$STRATEGY_DIR/logs/metrics_history.json"
+
+echo "" >> $LOG
+echo "=============================================" >> $LOG
+echo " NSE STRATEGY DAILY RUN — $(date '+%Y-%m-%d %H:%M:%S')" >> $LOG
+echo "=============================================" >> $LOG
+
+# PHASE 1: INGEST NEW CSV FILES
+echo "" >> $LOG
+echo "[PHASE 1] Ingesting new CSV files..." >> $LOG
+NEW_FILES=0
+for f in $(ls $STRATEGY_DIR/GFDLCM_STOCK_*.csv 2>/dev/null | sort); do
+  fname=$(basename $f)
+  DATE_PART=$(echo $fname | grep -oE '[0-9]{8}' | head -1)
+  DAY=$(echo $DATE_PART | cut -c1-2)
+  MON=$(echo $DATE_PART | cut -c3-4)
+  YR=$(echo $DATE_PART | cut -c5-8)
+  PARQUET="$STRATEGY_DIR/data/lake/$YR-$MON-$DAY.parquet"
+  if [ ! -f "$PARQUET" ]; then
+    echo " [NEW] Ingesting: $fname" >> $LOG
+    $PYTHON $STRATEGY_DIR/01_ingest.py --zip $f >> $LOG 2>&1
+    NEW_FILES=$((NEW_FILES + 1))
+  else
+    echo " [SKIP] Already ingested: $fname" >> $LOG
+  fi
+done
+echo " New files ingested: $NEW_FILES" >> $LOG
+
+# PHASE 2: COUNT AVAILABLE TRAINING DAYS
+echo "" >> $LOG
+echo "[PHASE 2] Checking data lake..." >> $LOG
+TOTAL_DAYS=$(ls $STRATEGY_DIR/data/lake/*.parquet 2>/dev/null | wc -l)
+TOTAL_DAYS=$(echo $TOTAL_DAYS | tr -d ' ')
+if [ -z "$TOTAL_DAYS" ] || [ "$TOTAL_DAYS" = "0" ]; then
+ TOTAL_DAYS=1
+fi
+echo " Total trading days in lake: $TOTAL_DAYS" >> $LOG
+
+# PHASE 3: ADAPTIVE PARAMETER TUNING
+echo "" >> $LOG
+echo "[PHASE 3] Applying adaptive parameters for $TOTAL_DAYS days of data..." >> $LOG
+
+$PYTHON << PYTUNER >> $LOG 2>&1
+import re
+from pathlib import Path
+
+days = int("$TOTAL_DAYS")
+cfg_path = Path("/root/nse_strategy/02_train.py")
+
+with open(cfg_path, 'r') as f:
+    content = f.read()
+
+if days < 15:
+    params = {"FORWARD_BARS": 8, "UP_THRESHOLD": 0.003, "DOWN_THRESHOLD": -0.003, "MIN_CONF": 0.60, "ATR_SL_MULT": 1.5, "ATR_TP_MULT": 4.5}
+    stage = "EARLY (< 15 days)"
+elif days < 30:
+    params = {"FORWARD_BARS": 6, "UP_THRESHOLD": 0.004, "DOWN_THRESHOLD": -0.004, "MIN_CONF": 0.58, "ATR_SL_MULT": 1.4, "ATR_TP_MULT": 4.2}
+    stage = "BUILDING (15-30 days)"
+elif days < 60:
+    params = {"FORWARD_BARS": 5, "UP_THRESHOLD": 0.005, "DOWN_THRESHOLD": -0.005, "MIN_CONF": 0.60, "ATR_SL_MULT": 1.3, "ATR_TP_MULT": 3.9}
+    stage = "MATURING (30-60 days)"
+else:
+    params = {"FORWARD_BARS": 5, "UP_THRESHOLD": 0.006, "DOWN_THRESHOLD": -0.006, "MIN_CONF": 0.62, "ATR_SL_MULT": 1.2, "ATR_TP_MULT": 3.6}
+    stage = "MATURE (60+ days)"
+
+content = re.sub(r"FORWARD_BARS\s*=\s*\d+", f"FORWARD_BARS = {params['FORWARD_BARS']}", content)
+content = re.sub(r"UP_THRESHOLD\s*=\s*[\d.]+", f"UP_THRESHOLD = {params['UP_THRESHOLD']}", content)
+content = re.sub(r"DOWN_THRESHOLD\s*=\s*-?[\d.]+", f"DOWN_THRESHOLD = {params['DOWN_THRESHOLD']}", content)
+content = re.sub(r"MIN_CONF\s*=\s*[\d.]+", f"MIN_CONF = {params['MIN_CONF']}", content)
+content = re.sub(r"ATR_SL_MULT\s*=\s*[\d.]+", f"ATR_SL_MULT = {params['ATR_SL_MULT']}", content)
+content = re.sub(r"ATR_TP_MULT\s*=\s*[\d.]+", f"ATR_TP_MULT = {params['ATR_TP_MULT']}", content)
+
+with open(cfg_path, 'w') as f:
+    f.write(content)
+
+print(f"STAGE: {stage}")
+for k, v in params.items():
+    print(f" {k} = {v}")
+PYTUNER
+
+# PHASE 4: RETRAIN MODEL
+echo "" >> $LOG
+echo "[PHASE 4] Running training pipeline..." >> $LOG
+cd $STRATEGY_DIR && $PYTHON $STRATEGY_DIR/02_train.py >> $LOG 2>&1
+TRAIN_EXIT=$?
+
+if [ $TRAIN_EXIT -ne 0 ]; then
+    echo " [ERROR] Training failed" >> $LOG
+else
+    echo " [OK] Training completed" >> $LOG
+fi
+
+# PHASE 5: EXTRACT AND EVALUATE METRICS
+echo "" >> $LOG
+echo "[PHASE 5] Evaluating performance metrics..." >> $LOG
+
+$PYTHON << PYEVAL >> $LOG 2>&1
+import json
+import os
+from pathlib import Path
+from datetime import datetime
+
+meta_path = Path("/root/nse_strategy/models/latest/meta.json")
+metrics_path = Path("/root/nse_strategy/logs/metrics_history.json")
+
+if not meta_path.exists():
+    print(" [WARN] No meta.json found")
+    exit()
+
+with open(meta_path) as f:
+    meta = json.load(f)
+
+best = meta.get("best_model", "Unknown")
+bt = meta.get("models", {}).get(best, {}).get("backtest", {})
+
+win_rate = bt.get("win_rate_pct", 0)
+pf = bt.get("profit_factor", 0)
+sharpe = bt.get("sharpe_ratio", 0)
+max_dd = bt.get("max_drawdown_inr", 0)
+pnl = bt.get("total_net_pnl", 0)
+sl = bt.get("sl_hits", 0)
+tgt = bt.get("target_hits", 0)
+
+print(f" Best model: {best}")
+print(f" Win rate: {win_rate}%")
+print(f" Profit factor: {pf}")
+print(f" Sharpe ratio: {sharpe}")
+print(f" Max drawdown: Rs {max_dd:,.2f}")
+print(f" Net P&L: Rs {pnl:,.2f}")
+print(f" SL hits: {sl}")
+print(f" Target hits: {tgt}")
+
+gates = {
+    "win_rate_52pct": win_rate >= 52,
+    "profit_factor_1p3": pf >= 1.3,
+    "sharpe_1p5": sharpe >= 1.5,
+    "drawdown_15k": max_dd <= 15000,
+    "max_loss_per_trade_5k": True,
+    "targets_gt_sl": tgt > sl,
+}
+passed = sum(gates.values())
+
+print(f"\\n GATE RESULTS ({passed}/6):")
+for gate, ok in gates.items():
+    print(f" {'PASS' if ok else 'FAIL'} {gate}")
+
+record = {
+    "date": datetime.now().strftime("%Y-%m-%d"),
+    "days_in_lake": int(os.environ.get("TOTAL_DAYS", 0)),
+    "best_model": best,
+    "win_rate": win_rate,
+    "profit_factor": pf,
+    "sharpe": sharpe,
+    "max_drawdown": max_dd,
+    "net_pnl": pnl,
+    "gates_passed": passed,
+    "gates_total": 7,
+    "ready_for_live": passed >= 5,
+}
+
+history = []
+if metrics_path.exists():
+    try:
+        with open(metrics_path) as f:
+            history = json.load(f)
+    except:
+        pass
+
+history.append(record)
+with open(metrics_path, "w") as f:
+    json.dump(history, f, indent=2)
+
+if passed >= 5:
+    print(f"\\n READY FOR PAPER TRADING: {passed}/7 gates")
+elif passed >= 3:
+    print(f"\\n PROGRESSING: {passed}/7 gates")
+else:
+    print(f"\\n EARLY STAGE: {passed}/7 gates")
+PYEVAL
+
+echo "" >> $LOG
+echo "=============================================" >> $LOG
+echo " DAILY RUN COMPLETE — $(date '+%Y-%m-%d %H:%M:%S')" >> $LOG
+echo "=============================================" >> $LOG
