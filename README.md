@@ -333,9 +333,8 @@ python nse_transfer.py
 ## Author
 
 **Anwar**
-Associate Vice President — IT Audit, RAKBANK
 Certifications: OSCP, CISA, CISSP
-Company: KAIZIFY — Cybersecurity, Software Development, Corporate Training
+Company: Cybersecurity, Software Development, Corporate Training
 
 ---
 
