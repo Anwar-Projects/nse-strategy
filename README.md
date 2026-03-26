@@ -1,5 +1,4 @@
 # NSE Intraday ML Strategy Pipeline
-**KAIZIFY — Anwar**
 
 Production-grade machine learning pipeline for NSE intraday trading.
 Trains on daily 1-minute OHLCV data, generates BUY/SELL signals with
