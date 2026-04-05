@@ -1,0 +1,266 @@
+#!/usr/bin/env python3
+import json
+import time
+import logging
+import sys
+from pathlib import Path
+from datetime import datetime, date
+import pandas as pd
+import numpy as np
+import joblib
+import pandas_ta as ta
+
+from dotenv import load_dotenv
+load_dotenv('/root/nse_strategy/.env')
+
+BASE_DIR = Path("/root/nse_strategy")
+MODEL_DIR = BASE_DIR / "models" / "latest"
+LAKE_DIR = BASE_DIR / "data" / "lake"
+LOG_DIR = BASE_DIR / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+
+today = date.today().isoformat()
+paper_log = LOG_DIR / f"paper_trades_{today}.json"
+run_log = LOG_DIR / f"paper_run_{today}.log"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.FileHandler(run_log), logging.StreamHandler(sys.stdout)]
+)
+log = logging.getLogger("paper")
+
+FEATURE_COLS = [
+    "ret_1","ret_3","ret_5","log_ret_1","body",
+    "upper_shadow","lower_shadow","hl_range","is_bullish",
+    "ema5_dist","ema10_dist","ema20_dist","ema5_10_xo",
+    "macd_hist","macd_bull","adx","di_diff",
+    "rsi14","rsi_overbought","rsi_oversold",
+    "stoch_k","stoch_d","stoch_bull","roc10","willr14",
+    "atr_pct","bb_pct","bb_width","bb_squeeze",
+    "vwap_dist","vol_ratio","high_vol","obv_trend",
+    "mins_open","session","rolling_std5","rolling_std10",
+    "price_rank20","prev_day_ret","day_num","day_of_week"
+]
+
+def load_model():
+    with open(MODEL_DIR / "meta.json") as f:
+        meta = json.load(f)
+    best = meta["best_model"]
+    fname = "rf_model.pkl" if best == "RandomForest" else "xgb_model.pkl"
+    model = joblib.load(MODEL_DIR / fname)
+    scaler = joblib.load(MODEL_DIR / "scaler.pkl")
+    bt = meta["models"][best]["backtest"]
+    log.info(f"Loaded {best} | WR={bt.get('win_rate_pct',0):.1f}% | PF={bt.get('profit_factor',0):.3f} | Sharpe={bt.get('sharpe_ratio',0):.3f}")
+    return model, scaler, meta
+
+def load_today_data():
+    p = LAKE_DIR / f"{today}.parquet"
+    if not p.exists():
+        return pd.DataFrame()
+    return pd.read_parquet(p)
+
+def engineer(df):
+    d = df.copy().sort_values("DateTime").reset_index(drop=True)
+    d["ret_1"] = d["Close"].pct_change(1)
+    d["ret_3"] = d["Close"].pct_change(3)
+    d["ret_5"] = d["Close"].pct_change(5)
+    d["log_ret_1"] = np.log(d["Close"] / d["Close"].shift(1))
+    d["body"] = (d["Close"] - d["Open"]) / d["Open"]
+    d["upper_shadow"] = (d["High"] - d[["Open","Close"]].max(axis=1)) / d["Open"]
+    d["lower_shadow"] = (d[["Open","Close"]].min(axis=1) - d["Low"]) / d["Open"]
+    d["hl_range"] = (d["High"] - d["Low"]) / d["Close"]
+    d["is_bullish"] = (d["Close"] >= d["Open"]).astype(int)
+    d["ema5"] = ta.ema(d["Close"], length=5)
+    d["ema10"] = ta.ema(d["Close"], length=10)
+    d["ema20"] = ta.ema(d["Close"], length=20)
+    d["ema5_dist"] = (d["Close"] - d["ema5"]) / d["Close"]
+    d["ema10_dist"] = (d["Close"] - d["ema10"]) / d["Close"]
+    return d
+
+class PaperBook:
+    def __init__(self):
+        self.trades = []
+        self.open_pos = {}
+        self.daily_pnl = 0.0
+
+    def open_position(self, sig):
+        ticker = sig["ticker"]
+        if ticker in self.open_pos:
+            return
+        self.open_pos[ticker] = sig
+        notify(
+            f"{"BUY" if sig["action"] == "BUY" else "SELL"} Signal | {ticker}",
+            f"Entry: Rs{sig["entry"]:.2f} | SL: Rs{sig["sl"]:.2f} | Qty: {sig["qty"]}")
+        log.info(f"[OPEN] {sig['action']:4s} {ticker:25s} Entry=Rs{sig['entry']:8.2f}")
+
+    def check_exits(self, ticker, high, low):
+        if ticker not in self.open_pos:
+            return
+        pos = self.open_pos[ticker]
+        ep = None
+        er = None
+        if pos["action"] == "BUY":
+            if low <= pos["sl"]:
+                ep = pos["sl"]
+                er = "SL"
+            elif high >= pos["target"]:
+                ep = pos["target"]
+                er = "TARGET"
+        else:
+            if high >= pos["sl"]:
+                ep = pos["sl"]
+                er = "SL"
+            elif low <= pos["target"]:
+                ep = pos["target"]
+                er = "TARGET"
+        if er:
+            self._close(ticker, ep, er)
+
+    def _close(self, ticker, exit_px, reason):
+        pos = self.open_pos.pop(ticker)
+        mult = 1 if pos["action"] == "BUY" else -1
+        gross = (exit_px - pos["entry"]) * pos["qty"] * mult
+        brok = (pos["entry"] + exit_px) * pos["qty"] * 0.0003
+        net = gross - brok
+        self.daily_pnl += net
+        self.trades.append({
+            **pos,
+            "exit_price": exit_px,
+            "exit_reason": reason,
+            "net_pnl": round(net, 2),
+            "exit_time": datetime.now().isoformat()
+        })
+        result = "WIN" if net > 0 else "LOSS"
+        notify(
+            f"{"WIN" if net > 0 else "LOSS"} | {ticker}",
+            f"Exit: Rs{exit_px:.2f} | {reason} | Net: Rs{net:+.2f}")
+        log.info(f"[CLOSE] {result:4s} {ticker:25s} Net=Rs{net:+8.2f}")
+
+    def save(self):
+        wins = sum(1 for t in self.trades if t["net_pnl"] > 0)
+        with open(paper_log, "w") as f:
+            json.dump({
+                "date": today,
+                "trades": self.trades,
+                "open_positions": len(self.open_pos),
+                "daily_pnl": round(self.daily_pnl, 2),
+                "total_trades": len(self.trades),
+                "wins": wins,
+                "losses": len(self.trades) - wins
+            }, f, indent=2)
+
+
+def notify(title: str, message: str):
+    import urllib.request, json, os
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    if not token or not chat_id:
+        return
+    text = f"<b>{title}</b>\n{message}"
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = json.dumps({
+        "chat_id" : chat_id,
+        "text" : text,
+        "parse_mode": "HTML"
+    }).encode()
+    try:
+        req = urllib.request.Request(
+            url,
+            data = payload,
+            headers = {"Content-Type": "application/json"},
+            method = "POST"
+        )
+        urllib.request.urlopen(req, timeout=10)
+    except Exception as e:
+        print(f"Telegram notify failed: {e}")
+
+def main():
+    log.info("=" * 55)
+    log.info(f"NSE PAPER TRADING -- {today}")
+    log.info("=" * 55)
+    
+    model, scaler, meta = load_model()
+    cfg = meta["config"]
+    book = PaperBook()
+    
+    MARKET_OPEN = 9 * 60 + 15
+    MARKET_CLOSE = 15 * 60 + 25
+    
+    log.info("Waiting for market open 09:15 IST...")
+    scored = {}
+    
+    while True:
+        now = datetime.now()
+        mins = now.hour * 60 + now.minute
+        
+        if mins < MARKET_OPEN:
+            time.sleep(30)
+            continue
+        if mins >= MARKET_CLOSE:
+            log.info("Market closed.")
+            break
+        
+        day_df = load_today_data()
+        if day_df.empty:
+            log.info("No lake data yet -- waiting...")
+            time.sleep(60)
+            continue
+        
+        for ticker in day_df["ticker"].unique():
+            tdf = day_df[day_df["ticker"] == ticker].copy()
+            if len(tdf) < 25:
+                continue
+            
+            latest = tdf.sort_values("DateTime").iloc[-1]
+            book.check_exits(ticker, latest["High"], latest["Low"])
+            
+            if ticker in book.open_pos:
+                continue
+            
+            try:
+                feat = engineer(tdf)
+                row = feat.dropna(subset=FEATURE_COLS).iloc[-1]
+            except:
+                continue
+            
+            X = pd.DataFrame([row[FEATURE_COLS]])
+            Xs = scaler.transform(X)
+            pred = model.predict(Xs)[0]
+            prob = model.predict_proba(Xs)[0]
+            conf = prob.max()
+            
+            if conf < cfg.get("min_conf", 0.55) or pred == 1:
+                continue
+            
+            entry = row["Close"]
+            atr = row.get("atr14", entry * 0.005)
+            slm = cfg.get("atr_sl_mult", 1.8)
+            tpm = cfg.get("atr_tp_mult", 3.2)
+            action = "BUY" if pred == 2 else "SELL"
+            sl = round(entry - atr*slm if action=="BUY" else entry + atr*slm, 2)
+            target = round(entry + atr*tpm if action=="BUY" else entry - atr*tpm, 2)
+            qty = int(100_000 / entry)
+            rr = round(abs(target-entry)/abs(sl-entry), 2) if sl != entry else 0
+            
+            if rr < 1.5 or qty == 0:
+                continue
+            
+            book.open_position({
+                "ticker": ticker,
+                "action": action,
+                "entry": round(entry, 2),
+                "sl": sl,
+                "target": target,
+                "qty": qty,
+                "confidence": round(conf, 4),
+                "rr": rr
+            })
+        
+        book.save()
+        time.sleep(60)
+    
+    book.save()
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,168 @@
+2026-03-23 01:36:33,578 - INFO - ============================================================
+2026-03-23 01:36:33,578 - INFO - Starting Daily Paper Trading Run
+2026-03-23 01:36:33,578 - INFO - ============================================================
+2026-03-23 01:36:33,578 - INFO - Loaded 0 open positions
+2026-03-23 01:36:33,578 - INFO - Downloading market data...
+2026-03-23 01:36:49,903 - ERROR - HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: TATAMOTORS.NS"}}}
+2026-03-23 01:36:51,197 - ERROR - $TATAMOTORS.NS: possibly delisted; no price data found  (period=250d) (Yahoo error = "No data found, symbol may be delisted")
+2026-03-23 01:36:52,016 - ERROR - HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: TATAMOTORS.NS"}}}
+2026-03-23 01:36:52,839 - ERROR - $TATAMOTORS.NS: possibly delisted; no price data found  (period=250d) (Yahoo error = "No data found, symbol may be delisted")
+2026-03-23 01:36:53,501 - ERROR - $TATAMOTORS.NS: possibly delisted; no price data found  (period=250d) (Yahoo error = "No data found, symbol may be delisted")
+2026-03-23 01:36:53,502 - ERROR - Failed to download data for TATAMOTORS after 3 attempts
+2026-03-23 01:37:14,935 - INFO - ============================================================
+2026-03-23 01:37:14,935 - INFO - Starting Daily Paper Trading Run
+2026-03-23 01:37:14,935 - INFO - ============================================================
+2026-03-23 01:37:14,935 - INFO - Loaded 0 open positions
+2026-03-23 01:37:14,935 - INFO - Downloading market data...
+2026-03-23 01:37:19,182 - INFO - Saved 0 open positions
+2026-03-23 01:37:19,182 - INFO - Total trades: 0
+2026-03-23 01:37:19,182 - INFO - Win rate: 0%
+2026-03-23 01:37:19,182 - INFO - Return: 0%
+2026-03-23 01:37:19,182 - WARNING - TELEGRAM_BOT_TOKEN not set, skipping Telegram notification
+2026-03-23 01:37:19,183 - INFO - Daily run completed
+2026-03-23 01:37:32,431 - ERROR - HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: TATAMOTORS.NS"}}}
+2026-03-23 01:37:33,827 - ERROR - $TATAMOTORS.NS: possibly delisted; no price data found  (period=250d) (Yahoo error = "No data found, symbol may be delisted")
+2026-03-23 01:37:34,662 - ERROR - HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: TATAMOTORS.NS"}}}
+2026-03-23 01:37:35,777 - ERROR - $TATAMOTORS.NS: possibly delisted; no price data found  (period=250d) (Yahoo error = "No data found, symbol may be delisted")
+2026-03-23 01:37:36,607 - ERROR - $TATAMOTORS.NS: possibly delisted; no price data found  (period=250d) (Yahoo error = "No data found, symbol may be delisted")
+2026-03-23 01:37:36,607 - ERROR - Failed to download data for TATAMOTORS after 3 attempts
+2026-03-23 01:38:04,778 - INFO - Saved 0 open positions
+2026-03-23 01:38:04,778 - INFO - Total trades: 0
+2026-03-23 01:38:04,779 - INFO - Win rate: 0%
+2026-03-23 01:38:04,779 - INFO - Return: 0%
+2026-03-23 01:38:06,851 - ERROR - Failed to send Telegram message: HTTP Error 401: Unauthorized
+2026-03-23 01:38:06,851 - INFO - Daily run completed
+Traceback (most recent call last):
+  File "/root/nse_strategy/paper_trading/daily_run.py", line 10, in <module>
+    import schedule
+ModuleNotFoundError: No module named 'schedule'
+2026-03-23 20:17:33,912 - INFO - ============================================================
+2026-03-23 20:17:33,912 - INFO - Starting Daily Paper Trading Run
+2026-03-23 20:17:33,912 - INFO - ============================================================
+2026-03-23 20:17:33,912 - INFO - Loaded 0 open positions
+2026-03-23 20:17:33,912 - INFO - Downloading market data...
+2026-03-23 20:18:20,466 - INFO - Saved 0 open positions
+2026-03-23 20:18:20,466 - INFO - Total trades: 0
+2026-03-23 20:18:20,466 - INFO - Win rate: 0%
+2026-03-23 20:18:20,466 - INFO - Return: 0%
+2026-03-23 20:18:20,466 - WARNING - TELEGRAM_BOT_TOKEN not set, skipping Telegram notification
+2026-03-23 20:18:20,466 - INFO - Daily run completed
+Traceback (most recent call last):
+  File "/root/nse_strategy/paper_trading/daily_run.py", line 10, in <module>
+    import schedule
+ModuleNotFoundError: No module named 'schedule'
+2026-03-24 20:38:48,573 - INFO - Paper trading scheduler started
+2026-03-24 20:38:48,573 - INFO - Scheduled runs: 09:35, 15:35
+2026-03-27 19:22:31,529 - INFO - Paper trading scheduler started
+2026-03-27 19:22:31,529 - INFO - Scheduled runs: 09:35, 15:35
+2026-03-27 19:24:10,724 - INFO - ============================================================
+2026-03-27 19:24:10,724 - INFO - Starting Daily Paper Trading Run
+2026-03-27 19:24:10,724 - INFO - ============================================================
+2026-03-27 19:24:10,725 - INFO - Loaded 0 open positions
+2026-03-27 19:24:10,725 - INFO - Downloading market data...
+2026-03-27 19:24:47,540 - INFO - Saved 0 open positions
+2026-03-27 19:24:47,541 - INFO - Total trades: 0
+2026-03-27 19:24:47,541 - INFO - Win rate: 0%
+2026-03-27 19:24:47,541 - INFO - Return: 0%
+2026-03-27 19:24:48,112 - INFO - Telegram message sent successfully
+2026-03-27 19:24:48,112 - INFO - Daily run completed
+2026-03-27 20:17:24,765 - INFO - ============================================================
+2026-03-27 20:17:24,765 - INFO - Starting Daily Paper Trading Run
+2026-03-27 20:17:24,765 - INFO - ============================================================
+2026-03-27 20:17:24,765 - INFO - Loaded 0 open positions
+2026-03-27 20:17:24,766 - INFO - Downloading market data...
+2026-03-27 20:18:02,848 - INFO - Saved 0 open positions
+2026-03-27 20:18:02,848 - INFO - Total trades: 0
+2026-03-27 20:18:02,848 - INFO - Win rate: 0%
+2026-03-27 20:18:02,848 - INFO - Return: 0%
+2026-03-27 20:18:03,354 - INFO - Telegram message sent successfully
+2026-03-27 20:18:03,355 - INFO - Daily run completed
+2026-03-30 11:00:02,772 - INFO - Paper trading scheduler started
+2026-03-30 11:00:02,773 - INFO - Scheduled runs: 09:35, 15:35
+2026-03-30 15:35:02,810 - INFO - ============================================================
+2026-03-30 15:35:02,810 - INFO - Starting Daily Paper Trading Run
+2026-03-30 15:35:02,810 - INFO - ============================================================
+2026-03-30 15:35:02,813 - INFO - Loaded 0 open positions
+2026-03-30 15:35:02,813 - INFO - Downloading market data...
+2026-03-30 15:35:41,557 - INFO - Saved 0 open positions
+2026-03-30 15:35:41,557 - INFO - Total trades: 0
+2026-03-30 15:35:41,557 - INFO - Win rate: 0%
+2026-03-30 15:35:41,557 - INFO - Return: 0%
+2026-03-30 15:35:42,147 - INFO - Telegram message sent successfully
+2026-03-30 15:35:42,147 - INFO - Daily run completed
+2026-03-31 11:00:02,986 - INFO - Paper trading scheduler started
+2026-03-31 11:00:02,987 - INFO - Scheduled runs: 09:35, 15:35
+2026-03-31 15:35:03,023 - INFO - ============================================================
+2026-03-31 15:35:03,023 - INFO - Starting Daily Paper Trading Run
+2026-03-31 15:35:03,023 - INFO - ============================================================
+2026-03-31 15:35:03,025 - INFO - Loaded 0 open positions
+2026-03-31 15:35:03,025 - INFO - Downloading market data...
+2026-03-31 15:35:41,716 - INFO - Saved 0 open positions
+2026-03-31 15:35:41,716 - INFO - Total trades: 0
+2026-03-31 15:35:41,716 - INFO - Win rate: 0%
+2026-03-31 15:35:41,716 - INFO - Return: 0%
+2026-03-31 15:35:42,352 - INFO - Telegram message sent successfully
+2026-03-31 15:35:42,352 - INFO - Daily run completed
+2026-04-01 11:00:02,691 - INFO - Paper trading scheduler started
+2026-04-01 11:00:02,692 - INFO - Scheduled runs: 09:35, 15:35
+2026-04-01 15:35:02,732 - INFO - ============================================================
+2026-04-01 15:35:02,732 - INFO - Starting Daily Paper Trading Run
+2026-04-01 15:35:02,732 - INFO - ============================================================
+2026-04-01 15:35:02,732 - INFO - Loaded 0 open positions
+2026-04-01 15:35:02,732 - INFO - Downloading market data...
+2026-04-01 15:35:41,277 - INFO - Saved 0 open positions
+2026-04-01 15:35:41,277 - INFO - Total trades: 0
+2026-04-01 15:35:41,277 - INFO - Win rate: 0%
+2026-04-01 15:35:41,277 - INFO - Return: 0%
+2026-04-01 15:35:42,165 - INFO - Telegram message sent successfully
+2026-04-01 15:35:42,165 - INFO - Daily run completed
+2026-04-02 11:00:02,582 - INFO - Paper trading scheduler started
+2026-04-02 11:00:02,582 - INFO - Scheduled runs: 09:35, 15:35
+2026-04-02 15:35:02,623 - INFO - ============================================================
+2026-04-02 15:35:02,623 - INFO - Starting Daily Paper Trading Run
+2026-04-02 15:35:02,623 - INFO - ============================================================
+2026-04-02 15:35:02,624 - INFO - Loaded 0 open positions
+2026-04-02 15:35:02,624 - INFO - Downloading market data...
+2026-04-02 15:35:48,302 - INFO - Position sizing: qty_risk=133, qty_exposure=133, qty_capital=222, final=133
+2026-04-02 15:35:48,302 - INFO - Saved 0 open positions
+2026-04-02 15:35:48,303 - INFO - Total trades: 0
+2026-04-02 15:35:48,303 - INFO - Win rate: 0%
+2026-04-02 15:35:48,303 - INFO - Return: 0%
+2026-04-02 15:35:53,941 - INFO - Telegram message sent successfully
+2026-04-02 15:35:53,941 - INFO - Daily run completed
+2026-04-03 11:00:02,344 - INFO - Paper trading scheduler started
+2026-04-03 11:00:02,344 - INFO - Scheduled runs: 09:35, 15:35
+2026-04-03 15:35:02,383 - INFO - ============================================================
+2026-04-03 15:35:02,383 - INFO - Starting Daily Paper Trading Run
+2026-04-03 15:35:02,383 - INFO - ============================================================
+2026-04-03 15:35:02,384 - INFO - Loaded 0 open positions
+2026-04-03 15:35:02,384 - INFO - Downloading market data...
+2026-04-03 15:35:41,161 - INFO - Position sizing: qty_risk=133, qty_exposure=133, qty_capital=222, final=133
+2026-04-03 15:35:41,161 - INFO - Saved 0 open positions
+2026-04-03 15:35:41,161 - INFO - Total trades: 0
+2026-04-03 15:35:41,161 - INFO - Win rate: 0%
+2026-04-03 15:35:41,161 - INFO - Return: 0%
+2026-04-03 15:35:41,656 - INFO - Telegram message sent successfully
+2026-04-03 15:35:41,656 - INFO - Daily run completed
+2026-04-04 10:35:01,877 - INFO - ============================================================
+2026-04-04 10:35:01,877 - INFO - Starting Daily Paper Trading Run
+2026-04-04 10:35:01,877 - INFO - ============================================================
+2026-04-04 10:35:01,877 - INFO - Market closed - Weekend
+2026-04-04 10:35:02,506 - INFO - Telegram message sent successfully
+2026-04-04 10:35:02,507 - INFO - Alert sent: Market closed - Weekend
+2026-04-04 10:44:02,176 - INFO - Paper trading scheduler started
+2026-04-04 10:44:02,176 - INFO - Scheduled runs: 09:35, 15:35
+2026-04-04 11:00:01,586 - INFO - Paper trading scheduler started
+2026-04-04 11:00:01,587 - INFO - Scheduled runs: 09:35, 15:35
+2026-04-04 15:35:01,630 - INFO - ============================================================
+2026-04-04 15:35:01,633 - INFO - Starting Daily Paper Trading Run
+2026-04-04 15:35:01,633 - INFO - ============================================================
+2026-04-04 15:35:01,633 - INFO - Market closed - Weekend
+2026-04-04 15:35:02,225 - INFO - ============================================================
+2026-04-04 15:35:02,226 - INFO - Starting Daily Paper Trading Run
+2026-04-04 15:35:02,226 - INFO - ============================================================
+2026-04-04 15:35:02,226 - INFO - Market closed - Weekend
+2026-04-04 15:35:02,264 - INFO - Telegram message sent successfully
+2026-04-04 15:35:02,264 - INFO - Alert sent: Market closed - Weekend
+2026-04-04 15:35:02,788 - INFO - Telegram message sent successfully
+2026-04-04 15:35:02,788 - INFO - Alert sent: Market closed - Weekend

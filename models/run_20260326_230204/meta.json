@@ -1,0 +1,200 @@
+{
+  "run_timestamp": "20260326_230204",
+  "bootstrap_mode": false,
+  "train_dates": [
+    "2026-01-09",
+    "2026-01-12",
+    "2026-01-13",
+    "2026-01-14",
+    "2026-01-16",
+    "2026-01-19",
+    "2026-01-20",
+    "2026-01-21",
+    "2026-01-22",
+    "2026-01-23",
+    "2026-01-27",
+    "2026-01-28",
+    "2026-01-29",
+    "2026-01-30",
+    "2026-02-01",
+    "2026-02-02",
+    "2026-02-03",
+    "2026-02-04",
+    "2026-02-05",
+    "2026-02-06",
+    "2026-02-09",
+    "2026-02-10",
+    "2026-02-11",
+    "2026-02-12",
+    "2026-02-13",
+    "2026-02-16",
+    "2026-02-17",
+    "2026-02-18",
+    "2026-02-19",
+    "2026-02-20",
+    "2026-02-23",
+    "2026-02-24",
+    "2026-02-25",
+    "2026-02-26",
+    "2026-02-27"
+  ],
+  "test_date": "2026-03-02",
+  "feature_cols": [
+    "ret_1",
+    "ret_3",
+    "ret_5",
+    "log_ret_1",
+    "body",
+    "upper_shadow",
+    "lower_shadow",
+    "hl_range",
+    "is_bullish",
+    "ema5_dist",
+    "ema10_dist",
+    "ema20_dist",
+    "ema5_10_xo",
+    "macd_hist",
+    "macd_bull",
+    "adx",
+    "di_diff",
+    "rsi14",
+    "rsi_overbought",
+    "rsi_oversold",
+    "stoch_k",
+    "stoch_d",
+    "stoch_bull",
+    "roc10",
+    "willr14",
+    "atr_pct",
+    "bb_pct",
+    "bb_width",
+    "bb_squeeze",
+    "vwap_dist",
+    "vol_ratio",
+    "high_vol",
+    "obv_trend",
+    "mins_open",
+    "session",
+    "rolling_std5",
+    "rolling_std10",
+    "price_rank20",
+    "prev_day_ret",
+    "day_num",
+    "day_of_week"
+  ],
+  "config": {
+    "forward_bars": 5,
+    "up_threshold": 0.005,
+    "down_threshold": -0.005,
+    "min_conf": 0.6,
+    "atr_sl_mult": 1.3,
+    "atr_tp_mult": 3.9,
+    "brokerage_pct": 0.0003,
+    "capital": 100000
+  },
+  "models": {
+    "RandomForest": {
+      "f1": 0.5652,
+      "sharpe": 5.859,
+      "backtest": {
+        "model": "RandomForest",
+        "test_date": "2026-03-02",
+        "total_trades": 1684,
+        "long_trades": 894,
+        "short_trades": 790,
+        "wins": 806,
+        "losses": 878,
+        "win_rate_pct": 47.86,
+        "cumulative_trade_pnl": 492690.26,
+        "portfolio_return": 492690.29,
+        "starting_equity": 100000,
+        "final_equity": 592690.29,
+        "peak_equity": 592690.29,
+        "avg_win_inr": 1044.38,
+        "avg_loss_inr": -397.58,
+        "profit_factor": 2.411,
+        "sharpe_ratio": 5.859,
+        "max_drawdown_inr": 7149.83,
+        "sl_hits": 878,
+        "target_hits": 789,
+        "breakeven_hits": 17,
+        "timeout_hits": 0,
+        "time_stops": 0,
+        "return_pct": 492.69
+      }
+    },
+    "XGBoost": {
+      "f1": 0.6151,
+      "sharpe": 7.124,
+      "backtest": {
+        "model": "XGBoost",
+        "test_date": "2026-03-02",
+        "total_trades": 106,
+        "long_trades": 78,
+        "short_trades": 28,
+        "wins": 54,
+        "losses": 52,
+        "win_rate_pct": 50.94,
+        "cumulative_trade_pnl": 49943.83,
+        "portfolio_return": 49943.85,
+        "starting_equity": 100000,
+        "final_equity": 149943.85,
+        "peak_equity": 149943.85,
+        "avg_win_inr": 1390.26,
+        "avg_loss_inr": -483.28,
+        "profit_factor": 2.987,
+        "sharpe_ratio": 7.124,
+        "max_drawdown_inr": 4047.76,
+        "sl_hits": 52,
+        "target_hits": 54,
+        "breakeven_hits": 0,
+        "timeout_hits": 0,
+        "time_stops": 0,
+        "return_pct": 49.944
+      }
+    }
+  },
+  "best_model": "XGBoost",
+  "top10_features": [
+    {
+      "feature": "ema10_dist",
+      "importance": 0.1411217384704635
+    },
+    {
+      "feature": "ema5_dist",
+      "importance": 0.10714757788698674
+    },
+    {
+      "feature": "ema20_dist",
+      "importance": 0.08167409193236318
+    },
+    {
+      "feature": "willr14",
+      "importance": 0.07963114015629233
+    },
+    {
+      "feature": "bb_width",
+      "importance": 0.06786259964259497
+    },
+    {
+      "feature": "rolling_std10",
+      "importance": 0.061486050636044634
+    },
+    {
+      "feature": "atr_pct",
+      "importance": 0.04678903267704572
+    },
+    {
+      "feature": "rolling_std5",
+      "importance": 0.0464439616123552
+    },
+    {
+      "feature": "bb_pct",
+      "importance": 0.040387489239408825
+    },
+    {
+      "feature": "ret_3",
+      "importance": 0.03677125156041985
+    }
+  ]
+}

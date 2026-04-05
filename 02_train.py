@@ -52,12 +52,12 @@ MODEL_DIR.mkdir(exist_ok=True)
 REPORT_DIR.mkdir(exist_ok=True)
 
 # ─── STRATEGY CONFIG ─────────────────────────────────────────────────────────
-FORWARD_BARS = 6
-UP_THRESHOLD = 0.004
-DOWN_THRESHOLD = -0.004
-MIN_CONF = 0.58
-ATR_SL_MULT = 1.4
-ATR_TP_MULT = 4.2
+FORWARD_BARS = 5
+UP_THRESHOLD = 0.005
+DOWN_THRESHOLD = -0.005
+MIN_CONF = 0.6
+ATR_SL_MULT = 1.3
+ATR_TP_MULT = 3.9
 BROKERAGE_PCT   = 0.0003
 PORTFOLIO_SIZE  = 100_000
 MAX_RISK_PER_TRADE = 5_000      # 5% of portfolio

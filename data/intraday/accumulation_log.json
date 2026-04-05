@@ -1,0 +1,17 @@
+{
+  "total_trading_days": 27,
+  "date_range": {
+    "start": "2026-02-01",
+    "end": "2026-03-04"
+  },
+  "total_rows": 34390,
+  "unique_symbols": 49,
+  "last_updated": "2026-04-05T00:52:43.671514",
+  "target_days": 120,
+  "estimated_ready_date": null,
+  "last_processed": "2026-04-03T17:54:42.336238",
+  "recently_added_dates": [
+    "2026-04-01",
+    "2026-04-02"
+  ]
+}

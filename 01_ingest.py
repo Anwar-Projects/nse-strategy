@@ -34,7 +34,7 @@ LAKE_DIR.mkdir(parents=True, exist_ok=True)
 MIN_CANDLES   = 100       # relaxed for multi-day (some days may be half-sessions)
 MIN_TOTAL_VOL = 50_000
 MIN_PRICE     = 5.0
-EQUITY_SUFFIX = "BE"      # NSE T2T equities (change to EQ when you get EQ data)
+EQUITY_SUFFIX = "NSE"     # NSE Cash Market EQ segment stocks
 
 # ─── REGISTRY ────────────────────────────────────────────────────────────────
 def load_registry() -> dict:
@@ -139,7 +139,12 @@ def ingest(zip_path: str, force: bool = False) -> bool:
     
     # Filter equity segment
     df["suffix"] = df["Ticker"].str.extract(r'\.([^.]+)\.NSE$')
-    eq = df[df["suffix"] == EQUITY_SUFFIX].copy()
+    # Handle pure .NSE tickers (RELIANCE.NSE has no middle suffix)
+    df["is_pure_nse"] = df["Ticker"].str.match(r'^[A-Z0-9&]+\.NSE$')
+    if EQUITY_SUFFIX == "NSE":
+        eq = df[df["is_pure_nse"] == True].copy()
+    else:
+        eq = df[df["suffix"] == EQUITY_SUFFIX].copy()
     print(f"  {EQUITY_SUFFIX} segment rows: {len(eq):,}  |  Tickers: {eq['Ticker'].nunique()}")
 
     # Liquidity filter

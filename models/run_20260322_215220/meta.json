@@ -1,0 +1,169 @@
+{
+  "run_timestamp": "20260322_215220",
+  "bootstrap_mode": false,
+  "train_dates": [
+    "2026-01-09",
+    "2026-01-12",
+    "2026-01-13",
+    "2026-01-14",
+    "2026-01-16",
+    "2026-01-19",
+    "2026-01-20",
+    "2026-01-21"
+  ],
+  "test_date": "2026-01-22",
+  "feature_cols": [
+    "ret_1",
+    "ret_3",
+    "ret_5",
+    "log_ret_1",
+    "body",
+    "upper_shadow",
+    "lower_shadow",
+    "hl_range",
+    "is_bullish",
+    "ema5_dist",
+    "ema10_dist",
+    "ema20_dist",
+    "ema5_10_xo",
+    "macd_hist",
+    "macd_bull",
+    "adx",
+    "di_diff",
+    "rsi14",
+    "rsi_overbought",
+    "rsi_oversold",
+    "stoch_k",
+    "stoch_d",
+    "stoch_bull",
+    "roc10",
+    "willr14",
+    "atr_pct",
+    "bb_pct",
+    "bb_width",
+    "bb_squeeze",
+    "vwap_dist",
+    "vol_ratio",
+    "high_vol",
+    "obv_trend",
+    "mins_open",
+    "session",
+    "rolling_std5",
+    "rolling_std10",
+    "price_rank20",
+    "prev_day_ret",
+    "day_num",
+    "day_of_week"
+  ],
+  "config": {
+    "forward_bars": 8,
+    "up_threshold": 0.003,
+    "down_threshold": -0.003,
+    "min_conf": 0.55,
+    "atr_sl_mult": 1.5,
+    "atr_tp_mult": 4.5,
+    "brokerage_pct": 0.0003,
+    "capital": 100000
+  },
+  "models": {
+    "RandomForest": {
+      "f1": 0.5755,
+      "sharpe": 2.315,
+      "backtest": {
+        "model": "RandomForest",
+        "test_date": "2026-01-22",
+        "total_trades": 914,
+        "long_trades": 481,
+        "short_trades": 433,
+        "wins": 477,
+        "losses": 437,
+        "win_rate_pct": 52.19,
+        "cumulative_trade_pnl": 17606393.91,
+        "portfolio_return": 17606393.93,
+        "starting_equity": 100000,
+        "final_equity": 17706393.93,
+        "peak_equity": 17706393.93,
+        "avg_win_inr": 37519.4,
+        "avg_loss_inr": -664.44,
+        "profit_factor": 61.637,
+        "sharpe_ratio": 2.315,
+        "max_drawdown_inr": 12282.29,
+        "sl_hits": 0,
+        "target_hits": 429,
+        "time_stops": 0,
+        "return_pct": 17606.394
+      }
+    },
+    "XGBoost": {
+      "f1": 0.5918,
+      "sharpe": 1.777,
+      "backtest": {
+        "model": "XGBoost",
+        "test_date": "2026-01-22",
+        "total_trades": 692,
+        "long_trades": 279,
+        "short_trades": 413,
+        "wins": 325,
+        "losses": 367,
+        "win_rate_pct": 46.97,
+        "cumulative_trade_pnl": 9812376.64,
+        "portfolio_return": 9812376.69,
+        "starting_equity": 100000,
+        "final_equity": 9912376.69,
+        "peak_equity": 9912705.31,
+        "avg_win_inr": 31035.1,
+        "avg_loss_inr": -746.68,
+        "profit_factor": 36.808,
+        "sharpe_ratio": 1.777,
+        "max_drawdown_inr": 24475.77,
+        "sl_hits": 0,
+        "target_hits": 295,
+        "time_stops": 1,
+        "return_pct": 9812.377
+      }
+    }
+  },
+  "best_model": "RandomForest",
+  "top10_features": [
+    {
+      "feature": "ema10_dist",
+      "importance": 0.10466482805360591
+    },
+    {
+      "feature": "ema5_dist",
+      "importance": 0.09274382046133767
+    },
+    {
+      "feature": "bb_width",
+      "importance": 0.0739032881147695
+    },
+    {
+      "feature": "ema20_dist",
+      "importance": 0.06190285821736942
+    },
+    {
+      "feature": "rolling_std10",
+      "importance": 0.06094316801102939
+    },
+    {
+      "feature": "willr14",
+      "importance": 0.058831479203133204
+    },
+    {
+      "feature": "rolling_std5",
+      "importance": 0.052453435747549695
+    },
+    {
+      "feature": "atr_pct",
+      "importance": 0.04703998073632638
+    },
+    {
+      "feature": "bb_pct",
+      "importance": 0.036544535198409944
+    },
+    {
+      "feature": "rsi14",
+      "importance": 0.03376035000820874
+    }
+  ]
+}

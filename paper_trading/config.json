@@ -1,0 +1,40 @@
+{
+  "strategy": "Mean Reversion Version B with Fix A+C",
+  "portfolio": {
+    "size": 100000,
+    "currency": "INR"
+  },
+  "risk_management": {
+    "max_risk_per_trade": 4000,
+    "max_open_trades": 3,
+    "max_exposure_pct": 0.60,
+    "atr_sl_mult": 2.0,
+    "atr_tp_mult": 3.0,
+    "forward_bars": 10,
+    "max_trade_pnl_pct": 0.15
+  },
+  "indicators": {
+    "rsi_period": 7,
+    "rsi_oversold": 25,
+    "rsi_overbought": 75,
+    "rsi_neutral": 50,
+    "adx_threshold": 30,
+    "sma_long_term": 200,
+    "sma_short_term": 10,
+    "min_avg_volume": 500000
+  },
+  "entry_logic": {
+    "long": "RSI(7) < 25 AND Price > SMA200 AND Price < SMA10 AND ADX < 30 AND Volume > 500k",
+    "short": "RSI(7) > 75 AND Price < SMA200 AND Price > SMA10 AND ADX < 30 AND Volume > 500k"
+  },
+  "exit_logic": {
+    "stop_loss": "entry ± (2.0 × ATR14)",
+    "rsi_exit": "LONG: RSI crosses above 50, SHORT: RSI crosses below 50",
+    "timeout": "10 bars"
+  },
+  "telegram": {
+    "chat_id": 8541952881
+  },
+  "created": "2026-03-23",
+  "version": "1.0"
+}

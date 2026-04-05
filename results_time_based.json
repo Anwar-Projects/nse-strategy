@@ -1,0 +1,102 @@
+{
+  "total_days": 71,
+  "total_trades": 2,
+  "signals_considered": 3479,
+  "signals_filtered": 3476,
+  "signals_taken": 2,
+  "signals_skipped": 1,
+  "win_rate": 0.0,
+  "profit_factor": 0.0,
+  "sharpe_ratio": -1.8973665961010275,
+  "max_drawdown": 2566.5393168766022,
+  "max_drawdown_pct": 2.5665393168766024,
+  "expectancy": -1298.2648584383012,
+  "total_profit": 0,
+  "total_loss": 2596.5297168766024,
+  "avg_win": 0,
+  "avg_loss": -1298.2648584383012,
+  "exit_reasons": {
+    "SL": 1,
+    "end_of_backtest": 1
+  },
+  "starting_equity": 100000,
+  "final_equity": 97403.4702831234,
+  "portfolio_return": -2596.5297168765974,
+  "return_pct": -2.5965297168765944,
+  "max_concurrent_observed": 1,
+  "max_exposure_observed": 49984.0,
+  "equity_curve_first_5": [
+    {
+      "date": "2025-12-09",
+      "equity": 100000,
+      "available_capital": 100000,
+      "total_exposure": 0.0,
+      "open_positions": 0
+    },
+    {
+      "date": "2025-12-10",
+      "equity": 100000,
+      "available_capital": 100000,
+      "total_exposure": 0.0,
+      "open_positions": 0
+    },
+    {
+      "date": "2025-12-11",
+      "equity": 100000,
+      "available_capital": 100000,
+      "total_exposure": 0.0,
+      "open_positions": 0
+    },
+    {
+      "date": "2025-12-12",
+      "equity": 100000,
+      "available_capital": 100000,
+      "total_exposure": 0.0,
+      "open_positions": 0
+    },
+    {
+      "date": "2025-12-15",
+      "equity": 100000,
+      "available_capital": 100000,
+      "total_exposure": 0.0,
+      "open_positions": 0
+    }
+  ],
+  "equity_curve_last_5": [
+    {
+      "date": "2026-03-16",
+      "equity": 97433.4606831234,
+      "available_capital": 97433.4606831234,
+      "total_exposure": 0.0,
+      "open_positions": 0
+    },
+    {
+      "date": "2026-03-17",
+      "equity": 97433.4606831234,
+      "available_capital": 97433.4606831234,
+      "total_exposure": 0.0,
+      "open_positions": 0
+    },
+    {
+      "date": "2026-03-18",
+      "equity": 97433.4606831234,
+      "available_capital": 97433.4606831234,
+      "total_exposure": 0.0,
+      "open_positions": 0
+    },
+    {
+      "date": "2026-03-19",
+      "equity": 97433.4606831234,
+      "available_capital": 97433.4606831234,
+      "total_exposure": 0.0,
+      "open_positions": 0
+    },
+    {
+      "date": "2026-03-20",
+      "equity": 97433.4606831234,
+      "available_capital": 47449.4606831234,
+      "total_exposure": 49984.0,
+      "open_positions": 1
+    }
+  ]
+}

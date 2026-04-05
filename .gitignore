@@ -1,45 +1,49 @@
-# Sensitive — never commit
-.env
-*.env
-
-# Data files — too large for GitHub
-data/lake/*.parquet
-data/registry.json
-incoming/
-GFDLCM_STOCK_*.csv
-GFDLCM_INDICES_*.csv
-*.zip
-*.csv
-
-# Trained models — too large
-models/run_*/
-models/latest/*.pkl
-models/latest/*.json
-
-# Logs
-logs/
-*.log
-
 # Python
 __pycache__/
-*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+.Python
 venv/
-.venv/
+env/
+.env
 
-# Backups
-*.bak
-*.bak2
-*.live_bak
+# Data files (too large for GitHub)
+data/lake/*.parquet
+data/intraday/*.csv
+incoming/*.zip
+incoming/*.csv
+incoming/extracted/
 
-# Reports
-reports/run_*/
+# Logs (auto-generated)
+logs/*.log
+logs/cron_*.log
+logs/ieod_*.log
+logs/health_*.log
+monitor_data/
 
-# OpenClaw internal files — not for GitHub
-AGENT_CONTEXT.md
-agent_startup.sh
-watchdog.sh
-setup_cron.sh
+# Credentials (NEVER commit)
+*.key
+*password*
+*token*
+run_ieod_with_auth.sh
+
+# Compiled
+*.dill
+*.pkl
+*.pickle
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# Archives
+archive/
+*.bak
