@@ -1,4 +1,6 @@
-# NSE Intraday Strategy — Bollinger Band Mean Reversion
+# NSE Intraday ML Strategy Pipeline
+
+> **Strategy:** Bollinger Band Mean Reversion on 3-minute bars
 
 Automated paper trading system for NSE Nifty50 stocks using
 Bollinger Band mean reversion on 3-minute intraday bars.
